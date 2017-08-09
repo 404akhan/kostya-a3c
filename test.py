@@ -30,10 +30,8 @@ def test(rank, args, shared_model):
     action_stat = [0] * (model.n_real_acts + model.n_aux_acts)
 
     start_time = time.time()
-
-    # a quick hack to prevent the agent from stucking
-    actions = deque(maxlen=100)
     episode_length = 0
+
     while True:
         # Sync with the shared model
         if done:
@@ -75,22 +73,15 @@ def test(rank, args, shared_model):
                 if counter_skips != action_np - model.n_real_acts + 1: # maintain hx, cx for conseq frames
                     _, _, (hx, cx) = model((Variable(torch.from_numpy(state).unsqueeze(0)), (hx, cx)))
 
-
-        # a quick hack to prevent the agent from stucking
-        actions.append(action[0, 0])
-        if actions.count(actions[0]) == actions.maxlen:
-            done = True
-
         if done:
             print("Time {}, episode reward {}, episode length {}".format(
                 time.strftime("%Hh %Mm %Ss",
                               time.gmtime(time.time() - start_time)),
                 reward_sum, episode_length))
             print("actions stats real {}, aux {}".format(action_stat[:model.n_real_acts], action_stat[model.n_real_acts:]))
-            
+
             reward_sum = 0
             episode_length = 0
-            actions.clear()
             state = env.reset()
             time.sleep(60)
 
