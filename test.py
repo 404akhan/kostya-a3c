@@ -13,6 +13,15 @@ import time
 from collections import deque
 
 
+def is_dead(info):
+    dead = False
+    if is_dead.current_life > info['ale.lives']:
+        dead = True
+    is_dead.current_life = info['ale.lives']
+    return dead
+
+is_dead.current_life = 0
+
 def test(rank, args, shared_model):
     torch.manual_seed(args.seed + rank)
 
@@ -27,6 +36,7 @@ def test(rank, args, shared_model):
     state = torch.from_numpy(state)
     reward_sum = 0
     done = True
+    dead = False
     action_stat = [0] * (model.n_real_acts + model.n_aux_acts)
 
     start_time = time.time()
@@ -36,13 +46,13 @@ def test(rank, args, shared_model):
         # Sync with the shared model
         if done:
             model.load_state_dict(shared_model.state_dict())
-            cx = Variable(torch.zeros(1, 256), volatile=True)
-            hx = Variable(torch.zeros(1, 256), volatile=True)
-
             if not os.path.exists('model-a3c-aux'):
                 os.makedirs('model-a3c-aux')
             torch.save(shared_model.state_dict(), 'model-a3c-aux/model-{}.pth'.format(args.model_name))
             print('saved model')
+        if done or dead:
+            cx = Variable(torch.zeros(1, 256), volatile=True)
+            hx = Variable(torch.zeros(1, 256), volatile=True)
         else:
             cx = Variable(cx.data, volatile=True)
             hx = Variable(hx.data, volatile=True)
@@ -56,18 +66,20 @@ def test(rank, args, shared_model):
         action_stat[action_np] += 1
 
         if action_np < model.n_real_acts:
-            state, reward, done, _ = env.step(action_np)
+            state, reward, done, info = env.step(action_np)
+            dead = is_dead(info)
             done = done or episode_length >= args.max_episode_length
             reward_sum += reward
             episode_length += 1
         else:
             for counter_skips in range(action_np - model.n_real_acts + 2):
                 state, rew, done, info = env.step(0)  # instead of random perform NOOP=0
+                dead = is_dead(info)
                 done = done or episode_length >= args.max_episode_length
 
                 reward_sum += rew
                 episode_length += 1
-                if done:
+                if done or dead:
                     break
 
                 if counter_skips != action_np - model.n_real_acts + 1: # maintain hx, cx for conseq frames
@@ -83,6 +95,7 @@ def test(rank, args, shared_model):
             reward_sum = 0
             episode_length = 0
             state = env.reset()
+            action_stat = [0] * (model.n_real_acts + model.n_aux_acts)
             time.sleep(60)
 
         state = torch.from_numpy(state)

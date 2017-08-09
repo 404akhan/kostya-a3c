@@ -17,6 +17,14 @@ def ensure_shared_grads(model, shared_model):
             return
         shared_param._grad = param.grad
 
+def is_dead(info):
+    dead = False
+    if is_dead.current_life > info['ale.lives']:
+        dead = True
+    is_dead.current_life = info['ale.lives']
+    return dead
+
+is_dead.current_life = 0
 
 def train(rank, args, shared_model, optimizer=None):
     torch.manual_seed(args.seed + rank)
@@ -34,12 +42,13 @@ def train(rank, args, shared_model, optimizer=None):
     state = env.reset()
     state = torch.from_numpy(state)
     done = True
+    dead = False
 
     episode_length = 0
     while True:
         # Sync with the shared model
         model.load_state_dict(shared_model.state_dict())
-        if done:
+        if done or dead:
             cx = Variable(torch.zeros(1, 256))
             hx = Variable(torch.zeros(1, 256))
         else:
@@ -64,7 +73,8 @@ def train(rank, args, shared_model, optimizer=None):
 
             action_np = action.numpy()[0][0]
             if action_np < model.n_real_acts:
-                state, reward, done, _ = env.step(action_np)
+                state, reward, done, info = env.step(action_np)
+                dead = is_dead(info)
                 done = done or episode_length >= args.max_episode_length
                 reward = max(min(reward, 1), -1)
                 episode_length += 1
@@ -72,12 +82,13 @@ def train(rank, args, shared_model, optimizer=None):
                 reward = 0.
                 for counter_skips in range(action_np - model.n_real_acts + 2):
                     state, rew, done, info = env.step(0)  # instead of random perform NOOP=0
+                    dead = is_dead(info)
                     done = done or episode_length >= args.max_episode_length
                     rew = max(min(rew, 1), -1)
 
                     reward += rew
                     episode_length += 1
-                    if done:
+                    if done or dead:
                         break
 
                     if counter_skips != action_np - model.n_real_acts + 1: # maintain hx, cx for conseq frames
@@ -93,11 +104,11 @@ def train(rank, args, shared_model, optimizer=None):
             log_probs.append(log_prob)
             rewards.append(reward)
 
-            if done:
+            if done or dead:
                 break
 
         R = torch.zeros(1, 1)
-        if not done:
+        if not done and not dead:
             value, _, _ = model((Variable(state.unsqueeze(0)), (hx, cx)))
             R = value.data
 
