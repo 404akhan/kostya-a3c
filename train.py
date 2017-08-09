@@ -24,7 +24,7 @@ def train(rank, args, shared_model, optimizer=None):
     env = create_atari_env(args.env_name)
     env.seed(args.seed + rank)
 
-    model = ActorCritic(env.observation_space.shape[0], env.action_space)
+    model = ActorCritic(env.observation_space.shape[0], env.action_space, args.num_skips)
 
     if optimizer is None:
         optimizer = optim.Adam(shared_model.parameters(), lr=args.lr)
@@ -37,7 +37,6 @@ def train(rank, args, shared_model, optimizer=None):
 
     episode_length = 0
     while True:
-        episode_length += 1
         # Sync with the shared model
         model.load_state_dict(shared_model.state_dict())
         if done:
@@ -63,9 +62,27 @@ def train(rank, args, shared_model, optimizer=None):
             action = prob.multinomial().data
             log_prob = log_prob.gather(1, Variable(action))
 
-            state, reward, done, _ = env.step(action.numpy())
-            done = done or episode_length >= args.max_episode_length
-            reward = max(min(reward, 1), -1)
+            action_np = action.numpy()[0][0]
+            if action_np < model.n_real_acts:
+                state, reward, done, _ = env.step(action_np)
+                done = done or episode_length >= args.max_episode_length
+                reward = max(min(reward, 1), -1)
+                episode_length += 1
+            else:
+                reward = 0.
+                for counter_skips in range(action_np - model.n_real_acts + 2):
+                    state, rew, done, info = env.step(0)  # instead of random perform NOOP=0
+                    done = done or episode_length >= args.max_episode_length
+                    rew = max(min(rew, 1), -1)
+
+                    reward += rew
+                    episode_length += 1
+                    if done:
+                        break
+
+                    if counter_skips != action_np - model.n_real_acts + 1: # maintain hx, cx for conseq frames
+                        _, _, (hx, cx) = model((Variable(torch.from_numpy(state).unsqueeze(0)), (hx, cx)))
+
 
             if done:
                 episode_length = 0
