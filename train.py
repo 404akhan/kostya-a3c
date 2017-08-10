@@ -1,6 +1,7 @@
 import math
 import os
 import sys
+import itertools
 
 import torch
 import torch.nn.functional as F
@@ -45,7 +46,7 @@ def train(rank, args, shared_model, optimizer=None):
     dead = False
 
     episode_length = 0
-    while True:
+    for ep_counter in itertools.count(1):
         # Sync with the shared model
         model.load_state_dict(shared_model.state_dict())
         if done or dead:
@@ -98,6 +99,7 @@ def train(rank, args, shared_model, optimizer=None):
             if done:
                 episode_length = 0
                 state = env.reset()
+                env.seed(args.seed + rank + (args.num_processes+1)*ep_counter)
 
             state = torch.from_numpy(state)
             values.append(value)

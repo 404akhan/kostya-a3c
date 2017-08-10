@@ -1,6 +1,7 @@
 import math
 import os
 import sys
+import itertools
 
 import torch
 import torch.nn.functional as F
@@ -11,7 +12,6 @@ from torch.autograd import Variable
 from torchvision import datasets, transforms
 import time
 from collections import deque
-
 
 def is_dead(info):
     dead = False
@@ -42,7 +42,7 @@ def test(rank, args, shared_model):
     start_time = time.time()
     episode_length = 0
 
-    while True:
+    for ep_counter in itertools.count(1):
         # Sync with the shared model
         if done:
             model.load_state_dict(shared_model.state_dict())
@@ -71,6 +71,16 @@ def test(rank, args, shared_model):
             done = done or episode_length >= args.max_episode_length
             reward_sum += reward
             episode_length += 1
+
+            if args.testing:
+                env.render()
+                if done or dead:
+                    cx = Variable(torch.zeros(1, 256), volatile=True)
+                    hx = Variable(torch.zeros(1, 256), volatile=True)
+                value, logit, _ = model(
+                    (Variable(torch.from_numpy(state).unsqueeze(0)), (hx, cx)))
+                print('episode', episode_length, 'normal action', action_np, 'lives', info['ale.lives'], \
+                    'rew', reward, 'value', value.data.numpy()[0][0], '!!!' if reward !=0 else '')
         else:
             for counter_skips in range(action_np - model.n_real_acts + 2):
                 state, rew, done, info = env.step(0)  # instead of random perform NOOP=0
@@ -79,9 +89,19 @@ def test(rank, args, shared_model):
 
                 reward_sum += rew
                 episode_length += 1
+
+                if args.testing:
+                    env.render()
+                    if done or dead:
+                        cx = Variable(torch.zeros(1, 256), volatile=True)
+                        hx = Variable(torch.zeros(1, 256), volatile=True)
+                    value, logit, _ = model(
+                        (Variable(torch.from_numpy(state).unsqueeze(0)), (hx, cx)))
+                    print('episode', episode_length, 'random action', action_np, 'lives', info['ale.lives'], \
+                        'rew', rew, 'value', value.data.numpy()[0][0], '!!!' if rew !=0 else '')
+
                 if done or dead:
                     break
-
                 if counter_skips != action_np - model.n_real_acts + 1: # maintain hx, cx for conseq frames
                     _, _, (hx, cx) = model((Variable(torch.from_numpy(state).unsqueeze(0)), (hx, cx)))
 
@@ -96,6 +116,7 @@ def test(rank, args, shared_model):
             episode_length = 0
             state = env.reset()
             action_stat = [0] * (model.n_real_acts + model.n_aux_acts)
-            time.sleep(60)
+            if not args.testing: time.sleep(60)
+            env.seed(args.seed + rank + (args.num_processes+1)*ep_counter)
 
         state = torch.from_numpy(state)
